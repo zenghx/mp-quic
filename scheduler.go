@@ -584,8 +584,12 @@ func (sch *scheduler) computeQuota(s *session) {
 	for _, pthTmp := range s.paths {
 		sender, ok := s.pathManager.oliaSenders[pthTmp.pathID]
 		if ok {
+			if sender.BandwidthEstimate() == 0 {
+				continue
+			}
 			dataOnPath := protocol.ByteCount(uint64(sender.BandwidthEstimate()/maxBandwidth) * uint64(dataToSend))
 			t := time_calculation(dataOnPath, *sender, pthTmp)
+
 			speedMap[pthTmp.pathID] = uint64(dataOnPath) / uint64(t)
 		}
 	}
