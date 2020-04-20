@@ -165,7 +165,7 @@ func (o *OliaSender) getEpsilon() {
 	for _, os := range o.oliaSenders {
 		tmpRTT = os.rttStats.SmoothedRTT() * os.rttStats.SmoothedRTT()
 		tmpBytes = os.olia.SmoothedBytesBetweenLosses()
-		if int64(tmpBytes) * bestRTT.Nanoseconds() >= int64(bestBytes) * tmpRTT.Nanoseconds() {
+		if int64(tmpBytes)*bestRTT.Nanoseconds() >= int64(bestBytes)*tmpRTT.Nanoseconds() {
 			bestRTT = tmpRTT
 			bestBytes = tmpBytes
 		}
@@ -180,7 +180,7 @@ func (o *OliaSender) getEpsilon() {
 		} else {
 			tmpRTT = os.rttStats.SmoothedRTT() * os.rttStats.SmoothedRTT()
 			tmpBytes = os.olia.SmoothedBytesBetweenLosses()
-			if int64(tmpBytes) * bestRTT.Nanoseconds() >= int64(bestBytes) * tmpRTT.Nanoseconds() {
+			if int64(tmpBytes)*bestRTT.Nanoseconds() >= int64(bestBytes)*tmpRTT.Nanoseconds() {
 				BNotM++
 			}
 		}
@@ -196,7 +196,7 @@ func (o *OliaSender) getEpsilon() {
 			tmpBytes = os.olia.SmoothedBytesBetweenLosses()
 			tmpCwnd = os.congestionWindow
 
-			if tmpCwnd < maxCwnd && int64(tmpBytes) * bestRTT.Nanoseconds() >= int64(bestBytes) * tmpRTT.Nanoseconds() {
+			if tmpCwnd < maxCwnd && int64(tmpBytes)*bestRTT.Nanoseconds() >= int64(bestBytes)*tmpRTT.Nanoseconds() {
 				os.olia.epsilonNum = 1
 				os.olia.epsilonDen = uint32(len(o.oliaSenders)) * uint32(BNotM)
 			} else if tmpCwnd == maxCwnd {
@@ -211,6 +211,27 @@ func (o *OliaSender) getEpsilon() {
 }
 
 func (o *OliaSender) maybeIncreaseCwnd(ackedPacketNumber protocol.PacketNumber, ackedBytes protocol.ByteCount, bytesInFlight protocol.ByteCount) {
+	// Do not increase the congestion window unless the sender is close to using
+	// the current window.
+	if !o.isCwndLimited(bytesInFlight) {
+		return
+	}
+	if o.congestionWindow >= o.maxTCPCongestionWindow {
+		return
+	}
+	if o.InSlowStart() {
+		// TCP slow start, exponential growth, increase by one for each ACK.
+		o.congestionWindow++
+		return
+	} else {
+		o.getEpsilon()
+		rate := getRate(o.oliaSenders, o.rttStats.SmoothedRTT())
+		cwndScaled := oliaScale(uint64(o.congestionWindow), scale)
+		o.congestionWindow = utils.MinPacketNumber(o.maxTCPCongestionWindow, o.olia.CongestionWindowAfterAck(o.congestionWindow, rate, cwndScaled))
+	}
+}
+
+func (o *OliaSender) MaybeIncreaseCwnd(bytesInFlight protocol.ByteCount) {
 	// Do not increase the congestion window unless the sender is close to using
 	// the current window.
 	if !o.isCwndLimited(bytesInFlight) {
@@ -253,7 +274,7 @@ func (o *OliaSender) OnPacketLost(packetNumber protocol.PacketNumber, lostBytes 
 			o.stats.slowstartPacketsLost++
 			o.stats.slowstartBytesLost += lostBytes
 			if o.slowStartLargeReduction {
-				if o.stats.slowstartPacketsLost == 1 || (o.stats.slowstartBytesLost/protocol.DefaultTCPMSS) > (o.stats.slowstartBytesLost - lostBytes)/protocol.DefaultTCPMSS {
+				if o.stats.slowstartPacketsLost == 1 || (o.stats.slowstartBytesLost/protocol.DefaultTCPMSS) > (o.stats.slowstartBytesLost-lostBytes)/protocol.DefaultTCPMSS {
 					// Reduce congestion window by 1 for every mss of bytes lost.
 					o.congestionWindow = utils.MaxPacketNumber(o.congestionWindow-1, o.minCongestionWindow)
 				}
@@ -323,7 +344,7 @@ func (o *OliaSender) RetransmissionDelay() time.Duration {
 	if o.rttStats.SmoothedRTT() == 0 {
 		return 0
 	}
-	return o.rttStats.SmoothedRTT() + o.rttStats.MeanDeviation() * 4
+	return o.rttStats.SmoothedRTT() + o.rttStats.MeanDeviation()*4
 }
 
 func (o *OliaSender) SmoothedRTT() time.Duration {

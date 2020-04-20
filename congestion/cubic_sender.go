@@ -226,6 +226,35 @@ func (c *cubicSender) maybeIncreaseCwnd(ackedPacketNumber protocol.PacketNumber,
 	}
 }
 
+func (c *cubicSender) MaybeIncreaseCwnd(bytesInFlight protocol.ByteCount) {
+	// Do not increase the congestion window unless the sender is close to using
+	// the current window.
+	if !c.isCwndLimited(bytesInFlight) {
+		c.cubic.OnApplicationLimited()
+		return
+	}
+	if c.congestionWindow >= c.maxTCPCongestionWindow {
+		return
+	}
+	if c.InSlowStart() {
+		// TCP slow start, exponential growth, increase by one for each ACK.
+		c.congestionWindow++
+		return
+	}
+	if c.reno {
+		// Classic Reno congestion avoidance.
+		c.congestionWindowCount++
+		// Divide by num_connections to smoothly increase the CWND at a faster
+		// rate than conventional Reno.
+		if protocol.PacketNumber(c.congestionWindowCount*protocol.ByteCount(c.numConnections)) >= c.congestionWindow {
+			c.congestionWindow++
+			c.congestionWindowCount = 0
+		}
+	} else {
+		c.congestionWindow = utils.MinPacketNumber(c.maxTCPCongestionWindow, c.cubic.CongestionWindowAfterAck(c.congestionWindow, c.rttStats.MinRTT()))
+	}
+}
+
 func (c *cubicSender) isCwndLimited(bytesInFlight protocol.ByteCount) bool {
 	congestionWindow := c.GetCongestionWindow()
 	if bytesInFlight >= congestionWindow {

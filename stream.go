@@ -241,6 +241,16 @@ func (s *stream) lenOfDataForWriting() protocol.ByteCount {
 	return l
 }
 
+func (s *stream) GetLenOfDataForWriting() protocol.ByteCount {
+	s.mutex.Lock()
+	var l protocol.ByteCount
+	if s.err == nil {
+		l = protocol.ByteCount(len(s.dataForWriting))
+	}
+	s.mutex.Unlock()
+	return l
+}
+
 func (s *stream) getDataForWriting(maxBytes protocol.ByteCount) []byte {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()

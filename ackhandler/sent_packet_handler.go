@@ -622,3 +622,7 @@ func (h *sentPacketHandler) garbageCollectSkippedPackets() {
 	}
 	h.skippedPackets = h.skippedPackets[deleteIndex:]
 }
+
+func (h *sentPacketHandler) GetBytesInFlight() protocol.ByteCount {
+	return h.bytesInFlight
+}

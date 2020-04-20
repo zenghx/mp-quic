@@ -1,6 +1,7 @@
 package quic
 
 import (
+	"github.com/lucas-clemente/quic-go/congestion"
 	"time"
 
 	"github.com/lucas-clemente/quic-go/ackhandler"
@@ -11,11 +12,11 @@ import (
 
 type scheduler struct {
 	// XXX Currently round-robin based, inspired from MPTCP scheduler
-	quotas map[protocol.PathID]uint
+	quotas map[protocol.PathID]uint64
 }
 
 func (sch *scheduler) setup() {
-	sch.quotas = make(map[protocol.PathID]uint)
+	sch.quotas = make(map[protocol.PathID]uint64)
 }
 
 func (sch *scheduler) getRetransmission(s *session) (hasRetransmission bool, retransmitPacket *ackhandler.Packet, pth *path) {
@@ -85,11 +86,11 @@ func (sch *scheduler) selectPathRoundRobin(s *session, hasRetransmission bool, h
 
 	// TODO cope with decreasing number of paths (needed?)
 	var selectedPath *path
-	var lowerQuota, currentQuota uint
+	var lowerQuota, currentQuota uint64
 	var ok bool
 
 	// Max possible value for lowerQuota at the beginning
-	lowerQuota = ^uint(0)
+	lowerQuota = ^uint64(0)
 
 pathLoop:
 	for pathID, pth := range s.paths {
@@ -209,7 +210,7 @@ func (sch *scheduler) selectPath(s *session, hasRetransmission bool, hasStreamRe
 	// XXX Currently round-robin
 	// TODO select the right scheduler dynamically
 	return sch.selectPathLowLatency(s, hasRetransmission, hasStreamRetransmission, fromPth)
-	// return sch.selectPathRoundRobin(s, hasRetransmission, hasStreamRetransmission, fromPth)
+	//return sch.selectPathRoundRobin(s, hasRetransmission, hasStreamRetransmission, fromPth)
 }
 
 // Lock of s.paths must be free (in case of log print)
@@ -426,4 +427,370 @@ func (sch *scheduler) sendPacket(s *session) error {
 			}
 		}
 	}
+}
+
+func (sch *scheduler) altSendPacket(s *session) error {
+	var pth *path
+	// Update leastUnacked value of paths
+	s.pathsLock.RLock()
+	for _, pthTmp := range s.paths {
+		pthTmp.SetLeastUnacked(pthTmp.sentPacketHandler.GetLeastUnacked())
+	}
+	s.pathsLock.RUnlock()
+
+	// get WindowUpdate frames
+	// this call triggers the flow controller to increase the flow control windows, if necessary
+	windowUpdateFrames := s.getWindowUpdateFrames(false)
+	for _, wuf := range windowUpdateFrames {
+		s.packer.QueueControlFrame(wuf, pth)
+	}
+	sch.computeQuota(s)
+	// Repeatedly try sending until we don't have any more data, or run out of the congestion window
+	for {
+		// We first check for retransmissions
+		hasRetransmission, retransmitHandshakePacket, fromPth := sch.getRetransmission(s)
+		// XXX There might still be some stream frames to be retransmitted
+		hasStreamRetransmission := s.streamFramer.HasFramesForRetransmission()
+
+		// Select the path here
+		s.pathsLock.RLock()
+		pth = sch.selectPathHighEstTransSpeed(s, hasRetransmission, hasStreamRetransmission, fromPth)
+		s.pathsLock.RUnlock()
+
+		// XXX No more path available, should we have a new QUIC error message?
+		if pth == nil {
+			windowUpdateFrames := s.getWindowUpdateFrames(false)
+			return sch.ackRemainingPaths(s, windowUpdateFrames)
+		}
+
+		// If we have an handshake packet retransmission, do it directly
+		if hasRetransmission && retransmitHandshakePacket != nil {
+			s.packer.QueueControlFrame(pth.sentPacketHandler.GetStopWaitingFrame(true), pth)
+			packet, err := s.packer.PackHandshakeRetransmission(retransmitHandshakePacket, pth)
+			if err != nil {
+				return err
+			}
+			if err = s.sendPackedPacket(packet, pth); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// XXX Some automatic ACK generation should be done someway
+		var ack *wire.AckFrame
+
+		ack = pth.GetAckFrame()
+		if ack != nil {
+			s.packer.QueueControlFrame(ack, pth)
+		}
+		if ack != nil || hasStreamRetransmission {
+			swf := pth.sentPacketHandler.GetStopWaitingFrame(hasStreamRetransmission)
+			if swf != nil {
+				s.packer.QueueControlFrame(swf, pth)
+			}
+		}
+
+		// Also add CLOSE_PATH frames, if any
+		for cpf := s.streamFramer.PopClosePathFrame(); cpf != nil; cpf = s.streamFramer.PopClosePathFrame() {
+			s.packer.QueueControlFrame(cpf, pth)
+		}
+
+		// Also add ADD ADDRESS frames, if any
+		for aaf := s.streamFramer.PopAddAddressFrame(); aaf != nil; aaf = s.streamFramer.PopAddAddressFrame() {
+			s.packer.QueueControlFrame(aaf, pth)
+		}
+
+		// Also add PATHS frames, if any
+		for pf := s.streamFramer.PopPathsFrame(); pf != nil; pf = s.streamFramer.PopPathsFrame() {
+			s.packer.QueueControlFrame(pf, pth)
+		}
+
+		pkt, sent, err := sch.performPacketSending(s, windowUpdateFrames, pth)
+		if err != nil {
+			return err
+		}
+		windowUpdateFrames = nil
+		if !sent {
+			// Prevent sending empty packets
+			return sch.ackRemainingPaths(s, windowUpdateFrames)
+		}
+
+		// Duplicate traffic when it was sent on an unknown performing path
+		// FIXME adapt for new paths coming during the connection
+		if pth.rttStats.SmoothedRTT() == 0 {
+			currentQuota := sch.quotas[pth.pathID]
+			// Was the packet duplicated on all potential paths?
+		duplicateLoop:
+			for pathID, tmpPth := range s.paths {
+				if pathID == protocol.InitialPathID || pathID == pth.pathID {
+					continue
+				}
+				if sch.quotas[pathID] < currentQuota && tmpPth.sentPacketHandler.SendingAllowed() {
+					// Duplicate it
+					pth.sentPacketHandler.DuplicatePacket(pkt)
+					break duplicateLoop
+				}
+			}
+		}
+
+		// And try pinging on potentially failed paths
+		if fromPth != nil && fromPth.potentiallyFailed.Get() {
+			err = s.sendPing(fromPth)
+			if err != nil {
+				return err
+			}
+		}
+	}
+}
+
+func (sch *scheduler) computeQuota(s *session) {
+	if sch.quotas == nil {
+		sch.setup()
+	}
+	for _, pthTmp := range s.paths {
+		if pthTmp.rttStats.SmoothedRTT() == 0 {
+			return
+		}
+	}
+	//获取待发送数据总量
+	var dataToSend protocol.ByteCount
+	for _, stream := range s.streamsMap.streams {
+		dataToSend += stream.GetLenOfDataForWriting()
+	}
+	if dataToSend == 0 {
+		return
+	}
+	var maxBandwidth congestion.Bandwidth
+	for _, pthTmp := range s.paths {
+		sender, ok := s.pathManager.oliaSenders[pthTmp.pathID]
+		if ok {
+			bandwidth := sender.BandwidthEstimate()
+			if bandwidth > maxBandwidth {
+				maxBandwidth = bandwidth
+			}
+		}
+	}
+	if maxBandwidth == 0 {
+		return
+	}
+	var bandwidthSum congestion.Bandwidth
+	for _, pthTmp := range s.paths {
+		sender, ok := s.pathManager.oliaSenders[pthTmp.pathID]
+		if ok {
+			bandwidthSum += sender.BandwidthEstimate()
+		}
+	}
+	speedMap := make(map[protocol.PathID]uint64)
+	for _, pthTmp := range s.paths {
+		sender, ok := s.pathManager.oliaSenders[pthTmp.pathID]
+		if ok {
+			dataOnPath := protocol.ByteCount(uint64(sender.BandwidthEstimate()/maxBandwidth) * uint64(dataToSend))
+			t := time_calculation(dataOnPath, *sender, pthTmp)
+			speedMap[pthTmp.pathID] = uint64(dataOnPath) / uint64(t)
+		}
+	}
+
+	var maxTransferSpeed uint64
+	for _, pthTmp := range s.paths {
+		ts, ok := speedMap[pthTmp.pathID]
+		if ok {
+			if ts > maxTransferSpeed {
+				maxTransferSpeed = ts
+			}
+		}
+	}
+	var aggTransSpeed uint64
+	for _, pthTmp := range s.paths {
+		ts, ok := speedMap[pthTmp.pathID]
+		if ok {
+			if ts < maxTransferSpeed/uint64(len(s.paths)) {
+				speedMap[pthTmp.pathID] = 0
+			}
+			aggTransSpeed += ts
+
+		}
+
+	}
+	estimatedFCT := uint64(dataToSend) / aggTransSpeed
+	maxDataOnPath := maxTransferSpeed * estimatedFCT
+	for _, pthTmp := range s.paths {
+		ts, ok := speedMap[pthTmp.pathID]
+		if ok {
+			sch.quotas[pthTmp.pathID] = maxDataOnPath - ts*estimatedFCT
+		}
+	}
+	utils.Infof("successfully computed quota")
+}
+
+func (sch *scheduler) selectPathHighEstTransSpeed(s *session, hasRetransmission bool, hasStreamRetransmission bool, fromPth *path) *path {
+	// XXX Avoid using PathID 0 if there is more than 1 path
+	if len(s.paths) <= 1 {
+		if !hasRetransmission && !s.paths[protocol.InitialPathID].SendingAllowed() {
+			return nil
+		}
+		return s.paths[protocol.InitialPathID]
+	}
+
+	// FIXME Only works at the beginning... Cope with new paths during the connection
+	if hasRetransmission && hasStreamRetransmission && fromPth.rttStats.SmoothedRTT() == 0 {
+		// Is there any other path with a lower number of packet sent?
+		currentQuota := sch.quotas[fromPth.pathID]
+		for pathID, pth := range s.paths {
+			if pathID == protocol.InitialPathID || pathID == fromPth.pathID {
+				continue
+			}
+			// The congestion window was checked when duplicating the packet
+			if sch.quotas[pathID] < currentQuota {
+				return pth
+			}
+		}
+	}
+
+	var selectedPath *path
+	var lowerQuota uint64
+	var currentRTT time.Duration
+	var lowerRTT time.Duration
+	selectedPathID := protocol.PathID(255)
+
+pathLoop:
+	for pathID, pth := range s.paths {
+		// Don't block path usage if we retransmit, even on another path
+		if !hasRetransmission && !pth.SendingAllowed() {
+			continue pathLoop
+		}
+
+		// If this path is potentially failed, do not consider it for sending
+		if pth.potentiallyFailed.Get() {
+			continue pathLoop
+		}
+
+		// XXX Prevent using initial pathID if multiple paths
+		if pathID == protocol.InitialPathID {
+			continue pathLoop
+		}
+
+		currentRTT = pth.rttStats.SmoothedRTT()
+
+		currentQuota, ok := sch.quotas[pth.pathID]
+		if !ok {
+			sch.quotas[pathID] = 0
+			currentQuota = 0
+		}
+		// Prefer staying single-path if not blocked by current path
+		// Don't consider this sample if the smoothed RTT is 0
+		if lowerRTT != 0 && currentRTT == 0 {
+			continue pathLoop
+		}
+
+		// Case if we have multiple paths unprobed
+		if currentRTT == 0 {
+			currentQuota, ok := sch.quotas[pathID]
+			if !ok {
+				sch.quotas[pathID] = 0
+				currentQuota = 0
+			}
+			lowerQuota, _ := sch.quotas[selectedPathID]
+			if selectedPath != nil && currentQuota > lowerQuota {
+				continue pathLoop
+			}
+		}
+
+		if currentQuota != 0 && lowerQuota != 0 && selectedPath != nil && currentQuota > lowerQuota {
+			continue pathLoop
+		}
+
+		// Update
+		lowerQuota = currentQuota
+		selectedPath = pth
+		selectedPathID = pathID
+	}
+
+	return selectedPath
+}
+
+func (sch *scheduler) selectSTTF(s *session, hasRetransmission bool, hasStreamRetransmission bool, fromPth *path) *path {
+	var dataToSend protocol.ByteCount
+	for _, stream := range s.streamsMap.streams {
+		dataToSend += stream.GetLenOfDataForWriting()
+	}
+	// XXX Avoid using PathID 0 if there is more than 1 path
+	if len(s.paths) <= 1 {
+		if !hasRetransmission && !s.paths[protocol.InitialPathID].SendingAllowed() {
+			return nil
+		}
+		return s.paths[protocol.InitialPathID]
+	}
+
+	// FIXME Only works at the beginning... Cope with new paths during the connection
+	if hasRetransmission && hasStreamRetransmission && fromPth.rttStats.SmoothedRTT() == 0 {
+		// Is there any other path with a lower number of packet sent?
+		currentQuota := sch.quotas[fromPth.pathID]
+		for pathID, pth := range s.paths {
+			if pathID == protocol.InitialPathID || pathID == fromPth.pathID {
+				continue
+			}
+			// The congestion window was checked when duplicating the packet
+			if sch.quotas[pathID] < currentQuota {
+				return pth
+			}
+		}
+	}
+
+	var selectedPath *path
+	var lowerRTT time.Duration
+	var currentRTT time.Duration
+	selectedPathID := protocol.PathID(255)
+	var minTransTime = ^uint64(0)
+
+pathLoop:
+	for pathID, pth := range s.paths {
+		// Don't block path usage if we retransmit, even on another path
+		if !hasRetransmission && !pth.SendingAllowed() {
+			continue pathLoop
+		}
+
+		// If this path is potentially failed, do not consider it for sending
+		if pth.potentiallyFailed.Get() {
+			continue pathLoop
+		}
+
+		// XXX Prevent using initial pathID if multiple paths
+		if pathID == protocol.InitialPathID {
+			continue pathLoop
+		}
+
+		currentRTT = pth.rttStats.SmoothedRTT()
+
+		// Prefer staying single-path if not blocked by current path
+		// Don't consider this sample if the smoothed RTT is 0
+		if lowerRTT != 0 && currentRTT == 0 {
+			continue pathLoop
+		}
+
+		// Case if we have multiple paths unprobed
+		if currentRTT == 0 {
+			currentQuota, ok := sch.quotas[pathID]
+			if !ok {
+				sch.quotas[pathID] = 0
+				currentQuota = 0
+			}
+			lowerQuota, _ := sch.quotas[selectedPathID]
+			if selectedPath != nil && currentQuota > lowerQuota {
+				continue pathLoop
+			}
+		}
+
+		TT := time_calculation(dataToSend, *s.pathManager.oliaSenders[pth.pathID], pth)
+		currentTT := uint64(TT)
+		if currentRTT != 0 && lowerRTT != 0 && selectedPath != nil && currentTT >= minTransTime {
+			continue pathLoop
+		}
+
+		// Update
+		minTransTime = currentTT
+		selectedPath = pth
+		selectedPathID = pathID
+	}
+
+	return selectedPath
 }
