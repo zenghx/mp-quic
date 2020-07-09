@@ -1,8 +1,9 @@
 package quic
 
 import (
-	"github.com/lucas-clemente/quic-go/congestion"
 	"time"
+
+	"github.com/lucas-clemente/quic-go/congestion"
 
 	"github.com/lucas-clemente/quic-go/ackhandler"
 	"github.com/lucas-clemente/quic-go/internal/protocol"
@@ -211,7 +212,8 @@ pathLoop:
 func (sch *scheduler) selectPath(s *session, hasRetransmission bool, hasStreamRetransmission bool, fromPth *path) *path {
 	// XXX Currently round-robin
 	// TODO select the right scheduler dynamically
-	return sch.selectPathLowLatency(s, hasRetransmission, hasStreamRetransmission, fromPth)
+	//return sch.selectPathLowLatency(s, hasRetransmission, hasStreamRetransmission, fromPth)
+	return sch.selectSTTF(s, hasRetransmission, hasStreamRetransmission, fromPth)
 	//return sch.selectPathRoundRobin(s, hasRetransmission, hasStreamRetransmission, fromPth)
 }
 
@@ -587,13 +589,12 @@ func (sch *scheduler) computeQuota(s *session) {
 	for _, pthTmp := range s.paths {
 		sender, ok := s.pathManager.oliaSenders[pthTmp.pathID]
 		if ok {
-			if sender.BandwidthEstimate() == 0 {
-				continue
-			}
 			dataOnPath := protocol.ByteCount(uint64(sender.BandwidthEstimate()/maxBandwidth) * uint64(dataToSend))
 			t := time_calculation(dataOnPath, *sender, pthTmp)
-
-			speedMap[pthTmp.pathID] = uint64(dataOnPath) / uint64(t)
+			if t == 0 {
+				t = 1000000
+			}
+			speedMap[pthTmp.pathID] = uint64(dataOnPath) / uint64(t/1000000) //转换为毫秒
 		}
 	}
 

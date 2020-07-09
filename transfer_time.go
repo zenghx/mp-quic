@@ -6,6 +6,7 @@ import (
 	"time"
 )
 
+//传输时间估算
 func time_calculation(dataToSend protocol.ByteCount, sender congestion.OliaSender, pth *path) time.Duration {
 	if dataToSend == 0 {
 		return 0

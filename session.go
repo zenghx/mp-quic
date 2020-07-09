@@ -387,7 +387,6 @@ runLoop:
 				// This could cause packets to be retransmitted, so check it before trying
 				// to send packets.
 				timerPth.sentPacketHandler.OnAlarm()
-				s.scheduler.computeQuota(s)
 			}
 			timerPth = nil
 		}
