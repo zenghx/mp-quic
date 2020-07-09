@@ -198,6 +198,8 @@ pathLoop:
 
 		// Update
 		lowerRTT = currentRTT
+		sntPkts, _, _ := pth.sentPacketHandler.GetStatistics()
+		utils.Infof("Path %x selectd, %d packets was sent on it", pathID, sntPkts)
 		selectedPath = pth
 		selectedPathID = pathID
 	}
@@ -543,6 +545,7 @@ func (sch *scheduler) altSendPacket(s *session) error {
 	}
 }
 
+//计算每条路径上的数据配额
 func (sch *scheduler) computeQuota(s *session) {
 	if sch.quotas == nil {
 		sch.setup()
@@ -623,7 +626,6 @@ func (sch *scheduler) computeQuota(s *session) {
 			sch.quotas[pthTmp.pathID] = maxDataOnPath - ts*estimatedFCT
 		}
 	}
-	utils.Infof("successfully computed quota")
 }
 
 func (sch *scheduler) selectPathHighEstTransSpeed(s *session, hasRetransmission bool, hasStreamRetransmission bool, fromPth *path) *path {
@@ -705,6 +707,8 @@ pathLoop:
 
 		// Update
 		lowerQuota = currentQuota
+		sntPkts, _, _ := pth.sentPacketHandler.GetStatistics()
+		utils.Infof("Path %x selectd, %d packets was sent on it", pathID, sntPkts)
 		selectedPath = pth
 		selectedPathID = pathID
 	}
@@ -792,6 +796,8 @@ pathLoop:
 
 		// Update
 		minTransTime = currentTT
+		sntPkts, _, _ := pth.sentPacketHandler.GetStatistics()
+		utils.Infof("Path %x selectd, %d packets was sent on it", pathID, sntPkts)
 		selectedPath = pth
 		selectedPathID = pathID
 	}
