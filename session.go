@@ -772,6 +772,7 @@ func (s *session) handleCloseError(closeErr closeError) error {
 }
 
 func (s *session) sendPacket() error {
+	//return s.scheduler.sendPacket(s)
 	return s.scheduler.altSendPacket(s)
 }
 

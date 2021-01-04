@@ -37,6 +37,8 @@ type RTTStats struct {
 	recentMinRTT     rttSample
 	halfWindowRTT    rttSample
 	quarterWindowRTT rttSample
+	packetSent       uint64
+	packetLost       uint64
 }
 
 // NewRTTStats makes a properly initialized RTTStats object
@@ -44,6 +46,8 @@ func NewRTTStats() *RTTStats {
 	return &RTTStats{
 		initialRTTus:       initialRTTus,
 		recentMinRTTwindow: utils.InfDuration,
+		packetLost:         0,
+		packetSent:         0,
 	}
 }
 

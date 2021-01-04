@@ -80,6 +80,7 @@ func (o *OliaSender) TimeUntilSend(now time.Time, bytesInFlight protocol.ByteCou
 }
 
 func (o *OliaSender) OnPacketSent(sentTime time.Time, bytesInFlight protocol.ByteCount, packetNumber protocol.PacketNumber, bytes protocol.ByteCount, isRetransmittable bool) bool {
+	o.rttStats.packetSent++
 	// Only update bytesInFlight for data packets.
 	if !isRetransmittable {
 		return false
@@ -290,7 +291,7 @@ func (o *OliaSender) OnPacketLost(packetNumber protocol.PacketNumber, lostBytes 
 
 	o.prr.OnPacketLost(bytesInFlight)
 	o.olia.OnPacketLost()
-
+	o.rttStats.packetLost++
 	// TODO(chromium): Separate out all of slow start into a separate class.
 	if o.slowStartLargeReduction && o.InSlowStart() {
 		o.congestionWindow = o.congestionWindow - 1
@@ -387,4 +388,11 @@ func (o *OliaSender) InRecovery() bool {
 
 func (o *OliaSender) InSlowStart() bool {
 	return o.GetCongestionWindow() < o.GetSlowStartThreshold()
+}
+
+func (o *OliaSender) GetLossRate() float32 {
+	if o.rttStats.packetSent != 0 {
+		return float32(o.rttStats.packetLost / o.rttStats.packetSent)
+	}
+	return 0
 }

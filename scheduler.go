@@ -708,8 +708,6 @@ pathLoop:
 
 		// Update
 		lowerQuota = currentQuota
-		sntPkts, _, _ := pth.sentPacketHandler.GetStatistics()
-		utils.Infof("Path %x selectd, %d packets was sent on it", pathID, sntPkts)
 		selectedPath = pth
 		selectedPathID = pathID
 	}
@@ -797,8 +795,6 @@ pathLoop:
 
 		// Update
 		minTransTime = currentTT
-		sntPkts, _, _ := pth.sentPacketHandler.GetStatistics()
-		utils.Infof("Path %x selectd, %d packets was sent on it", pathID, sntPkts)
 		selectedPath = pth
 		selectedPathID = pathID
 	}
