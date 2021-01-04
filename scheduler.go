@@ -199,8 +199,8 @@ pathLoop:
 
 		// Update
 		lowerRTT = currentRTT
-		sntPkts, _, _ := pth.sentPacketHandler.GetStatistics()
-		utils.Infof("Path %x selectd, %d packets was sent on it", pathID, sntPkts)
+		//sntPkts, _, _ := pth.sentPacketHandler.GetStatistics()
+		//utils.Infof("Path %x selectd, %d packets was sent on it", pathID, sntPkts)
 		selectedPath = pth
 		selectedPathID = pathID
 	}
@@ -212,8 +212,8 @@ pathLoop:
 func (sch *scheduler) selectPath(s *session, hasRetransmission bool, hasStreamRetransmission bool, fromPth *path) *path {
 	// XXX Currently round-robin
 	// TODO select the right scheduler dynamically
-	//return sch.selectPathLowLatency(s, hasRetransmission, hasStreamRetransmission, fromPth)
-	return sch.selectSTTF(s, hasRetransmission, hasStreamRetransmission, fromPth)
+	return sch.selectPathLowLatency(s, hasRetransmission, hasStreamRetransmission, fromPth)
+	//return sch.selectSTTF(s, hasRetransmission, hasStreamRetransmission, fromPth)
 	//return sch.selectPathRoundRobin(s, hasRetransmission, hasStreamRetransmission, fromPth)
 }
 
@@ -708,6 +708,8 @@ pathLoop:
 
 		// Update
 		lowerQuota = currentQuota
+		//sntPkts, _, _ := pth.sentPacketHandler.GetStatistics()
+		// utils.Infof("Path %x selectd, %d packets was sent on it", pathID, sntPkts)
 		selectedPath = pth
 		selectedPathID = pathID
 	}
@@ -795,6 +797,8 @@ pathLoop:
 
 		// Update
 		minTransTime = currentTT
+		//sntPkts, _, _ := pth.sentPacketHandler.GetStatistics()
+		//utils.Infof("Path %x selectd, %d packets was sent on it", pathID, sntPkts)
 		selectedPath = pth
 		selectedPathID = pathID
 	}
