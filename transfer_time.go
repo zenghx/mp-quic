@@ -14,7 +14,10 @@ func time_calculation(dataToSend protocol.ByteCount, sender congestion.OliaSende
 	freeCwnd := sender.GetCongestionWindow() - pth.sentPacketHandler.GetBytesInFlight()
 	rtt := sender.SmoothedRTT()
 	lossRate := sender.GetLossRate()
-	var alpha float64 = 1 / (1 - lossRate)
+	var alpha float64 = 1
+	if lossRate != 1 {
+		alpha = 1 / (1 - lossRate)
+	}
 	/*	for lossRate > 0.001 {
 			if lossRate == 1 {
 				break
