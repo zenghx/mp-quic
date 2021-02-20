@@ -190,4 +190,7 @@ const (
 	ConnectionMigrationNoNewNetwork ErrorCode = 83
 	// Network changed, but connection had one or more non-migratable streams.
 	ConnectionMigrationNonMigratableStream ErrorCode = 84
+
+	//PacketLostErrForReschedule
+	PacketLostErr ErrorCode = 101
 )

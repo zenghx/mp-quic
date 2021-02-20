@@ -390,9 +390,9 @@ func (o *OliaSender) InSlowStart() bool {
 	return o.GetCongestionWindow() < o.GetSlowStartThreshold()
 }
 
-func (o *OliaSender) GetLossRate() float32 {
+func (o *OliaSender) GetLossRate() float64 {
 	if o.rttStats.packetSent != 0 {
-		return float32(o.rttStats.packetLost / o.rttStats.packetSent)
+		return float64(o.rttStats.packetLost / o.rttStats.packetSent)
 	}
 	return 0
 }

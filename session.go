@@ -359,6 +359,10 @@ runLoop:
 		case p := <-s.receivedPackets:
 			err := s.handlePacketImpl(p)
 			if err != nil {
+				//Lost Detected, Perform Reschedule
+				if qErr, ok := err.(*qerr.QuicError); ok && qErr.ErrorCode == qerr.PacketLostErr {
+					s.scheduler.computeQuota(s)
+				}
 				if qErr, ok := err.(*qerr.QuicError); ok && qErr.ErrorCode == qerr.DecryptionFailure {
 					s.tryQueueingUndecryptablePacket(p)
 					continue

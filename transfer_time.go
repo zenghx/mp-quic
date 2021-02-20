@@ -13,15 +13,18 @@ func time_calculation(dataToSend protocol.ByteCount, sender congestion.OliaSende
 	}
 	freeCwnd := sender.GetCongestionWindow() - pth.sentPacketHandler.GetBytesInFlight()
 	rtt := sender.SmoothedRTT()
-	var extraTime time.Duration = 0
 	lossRate := sender.GetLossRate()
-	for lossRate > 0.01 {
-		extraTime += rtt
-		lossRate *= lossRate
-		if lossRate == 1 {
-			break
+	var alpha float64 = 1 / (1 - lossRate)
+	/*	for lossRate > 0.001 {
+			if lossRate == 1 {
+				break
+			}
+			alpha+=(1-lossRate)*float64(count)
+			count++
+			lossRate *= lossRate
+
 		}
-	}
+	*/
 	if freeCwnd > 0 && dataToSend < freeCwnd {
 		return rtt / 2
 	}
@@ -34,5 +37,5 @@ func time_calculation(dataToSend protocol.ByteCount, sender congestion.OliaSende
 		dataToSend = dataToSend - sender.GetCongestionWindow()
 	}
 	transferTime += sender.SmoothedRTT() / 2
-	return transferTime
+	return time.Duration(float64(transferTime) * alpha)
 }

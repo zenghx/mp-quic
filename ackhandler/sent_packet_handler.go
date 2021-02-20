@@ -41,6 +41,7 @@ var (
 	// ErrAckForSkippedPacket occurs when the client sent an ACK for a packet number that we intentionally skipped
 	ErrAckForSkippedPacket = qerr.Error(qerr.InvalidAckData, "Received an ACK for a skipped packet number")
 	errAckForUnsentPacket  = qerr.Error(qerr.InvalidAckData, "Received ACK for an unsent package")
+	ErrPacketLost          = qerr.Error(qerr.PacketLostErr, "Packet lost detected, reschedule needed")
 )
 
 var errPacketNumberNotIncreasing = errors.New("Already sent a packet with a higher packet number")
@@ -216,12 +217,14 @@ func (h *sentPacketHandler) ReceivedAck(ackFrame *wire.AckFrame, withPacketNumbe
 		}
 	}
 
-	h.detectLostPackets()
+	var isPacketLost = h.detectLostPackets()
 	h.updateLossDetectionAlarm()
 
 	h.garbageCollectSkippedPackets()
 	h.stopWaitingManager.ReceivedAck(ackFrame)
-
+	if isPacketLost {
+		return ErrPacketLost
+	}
 	return nil
 }
 
@@ -384,7 +387,7 @@ func (h *sentPacketHandler) updateLossDetectionAlarm() {
 	}
 }
 
-func (h *sentPacketHandler) detectLostPackets() {
+func (h *sentPacketHandler) detectLostPackets() bool {
 	h.lossTime = time.Time{}
 	now := time.Now()
 
@@ -396,7 +399,8 @@ func (h *sentPacketHandler) detectLostPackets() {
 		packet := el.Value
 
 		if packet.PacketNumber > h.LargestAcked {
-			break
+			//break
+			return false
 		}
 
 		timeSinceSent := now.Sub(packet.SendTime)
@@ -415,7 +419,9 @@ func (h *sentPacketHandler) detectLostPackets() {
 			h.queuePacketForRetransmission(p)
 			h.congestion.OnPacketLost(p.Value.PacketNumber, p.Value.Length, h.bytesInFlight)
 		}
+		return true
 	}
+	return false
 }
 
 func (h *sentPacketHandler) SetInflightAsLost() {
