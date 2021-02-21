@@ -362,6 +362,7 @@ runLoop:
 				//Lost Detected, Perform Reschedule
 				if qErr, ok := err.(*qerr.QuicError); ok && qErr.ErrorCode == qerr.PacketLostErr {
 					s.scheduler.computeQuota(s)
+					continue
 				}
 				if qErr, ok := err.(*qerr.QuicError); ok && qErr.ErrorCode == qerr.DecryptionFailure {
 					s.tryQueueingUndecryptablePacket(p)
