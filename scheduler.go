@@ -213,7 +213,7 @@ func (sch *scheduler) selectPath(s *session, hasRetransmission bool, hasStreamRe
 	// XXX Currently round-robin
 	// TODO select the right scheduler dynamically
 	return sch.selectPathLowLatency(s, hasRetransmission, hasStreamRetransmission, fromPth)
-	//return sch.selectSTTF(s, hasRetransmission, hasStreamRetransmission, fromPth)
+	return sch.selectSTTF(s, hasRetransmission, hasStreamRetransmission, fromPth)
 	//return sch.selectPathRoundRobin(s, hasRetransmission, hasStreamRetransmission, fromPth)
 }
 
