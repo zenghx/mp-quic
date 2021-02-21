@@ -359,11 +359,7 @@ runLoop:
 		case p := <-s.receivedPackets:
 			err := s.handlePacketImpl(p)
 			if err != nil {
-				//Lost Detected, Perform Reschedule
-				if qErr, ok := err.(*qerr.QuicError); ok && qErr.ErrorCode == qerr.PacketLostErr {
-					s.scheduler.computeQuota(s)
-					continue
-				}
+
 				if qErr, ok := err.(*qerr.QuicError); ok && qErr.ErrorCode == qerr.DecryptionFailure {
 					s.tryQueueingUndecryptablePacket(p)
 					continue
@@ -640,6 +636,13 @@ func (s *session) handleAckFrame(frame *wire.AckFrame) error {
 	if err == nil && pth.rttStats.SmoothedRTT() > s.rttStats.SmoothedRTT() {
 		// Update the session RTT, which comes to take the max RTT on all paths
 		s.rttStats.UpdateSessionRTT(pth.rttStats.SmoothedRTT())
+	}
+	//Lost Detected, Perform Reschedule
+	if qErr, ok := err.(*qerr.QuicError); ok && qErr.ErrorCode == qerr.PacketLostErr {
+		s.scheduler.computeQuota(s)
+		// Update the session RTT, which comes to take the max RTT on all paths
+		s.rttStats.UpdateSessionRTT(pth.rttStats.SmoothedRTT())
+		err = nil
 	}
 	return err
 }
