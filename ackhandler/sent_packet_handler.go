@@ -399,8 +399,7 @@ func (h *sentPacketHandler) detectLostPackets() bool {
 		packet := el.Value
 
 		if packet.PacketNumber > h.LargestAcked {
-			//break
-			return false
+			break
 		}
 
 		timeSinceSent := now.Sub(packet.SendTime)
